@@ -1,6 +1,6 @@
 # Reporting Tool — Automated Regression Suite
 
-Playwright + JavaScript regression suite for an internal reporting
+Playwright + JavaScript regression suite for a reporting
 application, built to cut manual retest time on recurring releases and
 wired into an Azure DevOps pipeline. A shared CSV test-case repository keeps
 manual and automated QA working from the same backlog.
