@@ -1,0 +1,121 @@
+# Azure DevOps pipeline for the Reporting Tool Playwright regression suite.
+#
+# Triggers automatically on pushes to main/release branches and on PRs into
+# main, and can also be scheduled nightly. Runs a fast @smoke gate first,
+# then the full @regression pass; publishes JUnit results + the HTML report
+# + traces/screenshots/video for any failures as build artifacts.
+#
+# Required pipeline setup (Project Settings > Pipelines > Library):
+#   Variable group: "reporting-tool-qa"
+#     - BASE_URL        (e.g. https://reporting.internal.company.com)
+#     - QA_USERNAME
+#     - QA_PASSWORD     (mark as "secret")
+
+trigger:
+  branches:
+    include:
+      - main
+      - release/*
+
+pr:
+  branches:
+    include:
+      - main
+
+schedules:
+  - cron: '0 3 * * 1-5' # 03:00 UTC, weekdays
+    displayName: Nightly regression run
+    branches:
+      include:
+        - main
+    always: true
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  - group: reporting-tool-qa
+  - name: CI
+    value: 'true'
+
+stages:
+  - stage: Smoke
+    displayName: 'Smoke test (build health gate)'
+    jobs:
+      - job: SmokeTests
+        displayName: 'Run @smoke tests'
+        steps:
+          - task: NodeTool@0
+            inputs:
+              versionSpec: '20.x'
+            displayName: 'Install Node.js'
+
+          - script: npm ci
+            displayName: 'Install dependencies'
+
+          - script: npx playwright install --with-deps chromium
+            displayName: 'Install Playwright browsers'
+
+          - script: npx playwright test --grep @smoke --project=chromium
+            displayName: 'Run smoke tests'
+            env:
+              BASE_URL: $(BASE_URL)
+              QA_USERNAME: $(QA_USERNAME)
+              QA_PASSWORD: $(QA_PASSWORD)
+
+          - task: PublishTestResults@2
+            condition: succeededOrFailed()
+            inputs:
+              testResultsFormat: 'JUnit'
+              testResultsFiles: 'test-results/junit/results.xml'
+              testRunTitle: 'Smoke - $(Build.BuildNumber)'
+              failTaskOnFailedTests: true
+
+  - stage: Regression
+    displayName: 'Full regression suite'
+    dependsOn: Smoke
+    condition: succeeded()
+    jobs:
+      - job: RegressionTests
+        displayName: 'Run @regression tests (all browsers)'
+        timeoutInMinutes: 60
+        steps:
+          - task: NodeTool@0
+            inputs:
+              versionSpec: '20.x'
+            displayName: 'Install Node.js'
+
+          - script: npm ci
+            displayName: 'Install dependencies'
+
+          - script: npx playwright install --with-deps
+            displayName: 'Install Playwright browsers (all engines)'
+
+          - script: npx playwright test --grep @regression
+            displayName: 'Run regression tests'
+            env:
+              BASE_URL: $(BASE_URL)
+              QA_USERNAME: $(QA_USERNAME)
+              QA_PASSWORD: $(QA_PASSWORD)
+
+          - task: PublishTestResults@2
+            condition: succeededOrFailed()
+            inputs:
+              testResultsFormat: 'JUnit'
+              testResultsFiles: 'test-results/junit/results.xml'
+              testRunTitle: 'Regression - $(Build.BuildNumber)'
+              failTaskOnFailedTests: true
+
+          - task: PublishPipelineArtifact@1
+            condition: succeededOrFailed()
+            inputs:
+              targetPath: 'playwright-report'
+              artifactName: 'playwright-html-report-$(Build.BuildNumber)'
+            displayName: 'Publish HTML report (traces/screenshots/video on failure)'
+
+          - task: PublishPipelineArtifact@1
+            condition: failed()
+            inputs:
+              targetPath: 'test-results/artifacts'
+              artifactName: 'failure-artifacts-$(Build.BuildNumber)'
+            displayName: 'Publish raw failure artifacts'
